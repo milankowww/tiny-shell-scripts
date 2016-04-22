@@ -1,0 +1,113 @@
+#! /bin/bash
+
+# this script waits for the shared drive. Then it starts all virtual machines
+# for this physical server.
+
+# shared disk is connected on boot, without involvement of the cluster
+# software. 
+#   drbd is: become-primary-on both;
+#   ocfs is: /dev/drbd/by-res/shared/0 /shared ocfs2 _netdev 0 0
+#
+# on START it waits for /data
+#   deletes /data/.services_of_<nodename>-mounted_on_*
+#   creates /data/.services_of_<nodename>-mounted_on_<hostname>
+#        (we ignore locking, split brains are solved by fencing in DRBD, OCFS or HB)
+#   starts the virtual machines
+#
+#  on STOP
+#   stops the servers
+#   dumps the current XML
+#   deletes /data/.services_of_<nodename>-mounted_on_<hostname>
+#
+#  on STATUS
+#   it just checks the existence of /data/.service_of_<nodename>-mounted_on_<hostname>
+
+usage() {
+    echo "usage: $0 <intended-hostname> <directory> (start|stop|status)"
+    exit 1
+}
+
+if [ $# -ne 3 ] ; then
+	usage
+fi
+
+INTENDED_HOSTNAME="$1"
+REAL_HOSTNAME="`hostname`"
+PEERNAME=`echo "$REAL_HOSTNAME" | tr 12 21`
+DIRECTORY="${2%/}"
+COMMAND="$3"
+
+STATUS_FILE="${DIRECTORY}/.services_of_${INTENDED_HOSTNAME}-mounted_on_${REAL_HOSTNAME}"
+
+check_stale_lock() {
+	if [ -e "$STATUS_FILE" ]; then
+		NOW=`date +%s`
+		UPTIME=`cat /proc/uptime | cut -d" " -f1 | cut -d. -f1`
+		FILECREATED=`ls -l --time-style=+%s "$STATUS_FILE" | cut -d" " -f6`
+		if [ $FILECREATED -lt $[$NOW-$UPTIME] ]; then
+			rm -f "$STATUS_FILE"
+		fi
+	fi
+}
+
+check_stale_lock
+
+case "$COMMAND" in
+start)
+	try=120
+	while :; do
+		awk 'BEGIN {retval=1} ($2=="'"$DIRECTORY"'") {retval=0} END {exit retval}' < /proc/mounts && break
+		echo "Waiting for $DIRECTORY to be mounted" > /dev/null
+		sleep 1
+		let --try || exit 1
+	done
+
+	touch "$STATUS_FILE"
+
+	cd "${DIRECTORY}/xml/${INTENDED_HOSTNAME}/"
+	for XML in *.xml ; do
+		DOM="${XML%.xml}"
+		if virsh dominfo "$DOM" | egrep -q 'State: *running$' ; then
+			/bin/true # already running, nothing to do here
+		else
+			DOM="${XML%.xml}"
+			virsh destroy "$DOM" > /dev/null 2>&1
+			virsh undefine "$DOM" > /dev/null 2>&1
+			virsh define "$XML" || continue
+			virsh start "$DOM"
+		fi
+	done
+
+	exit 0
+	;;
+stop)
+	if ssh "$PEERNAME" pidof heartbeat > /dev/null 2>&1; then
+		/usr/local/bin/live_migrate --all-heartbeat "$INTENDED_HOSTNAME"
+	fi
+
+	cd "${DIRECTORY}/xml/${INTENDED_HOSTNAME}/"
+
+	for XML in *.xml ; do
+		DOM="${XML%.xml}"
+		virsh destroy "$DOM" > /dev/null 2>&1
+		virsh dumpxml "$DOM" > "$XML" 2> /dev/null
+	done
+
+	rm -f "$STATUS_FILE"
+	exit 0
+	;;
+status)
+
+	if [ -e "$STATUS_FILE" ]; then
+		echo "OK running" # don't touch, http://www.linux-ha.org/wiki/Heartbeat_Resource_Agents
+		exit 0
+	else
+		echo "Stopped"
+		exit 3
+	fi
+	;;
+*)
+	usage
+	exit 1
+esac
+

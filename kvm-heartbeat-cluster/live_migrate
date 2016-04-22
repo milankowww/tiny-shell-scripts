@@ -1,0 +1,77 @@
+#! /bin/bash
+
+HOSTNAME=`hostname`
+PEERNAME=`echo "$HOSTNAME" | tr 12 21`
+
+if [ "$#" -eq 0 ]; then
+	echo "$0 <virt_name> [<virt_name> ...]"
+	echo "$0 --all"
+	exit 1
+elif [ "$1" == "--all-heartbeat" ]; then
+	MACHINES=()
+	while read X ; do
+		MACHINES+=("$X")
+	done < <(virsh list --name 2> /dev/null | grep -v '^$')
+elif [ "$1" == "--all" ]; then
+	MACHINES=()
+	while read X ; do
+		MACHINES+=("$X")
+	done < <(virsh list --name 2> /dev/null | grep -v '^$')
+else	
+	MACHINES=("$@")
+fi
+
+if ping -q -c 1 -i 1 -W 1 "$PEERNAME" >/dev/null 2>&1 ; then
+	:
+else
+	echo "Cannot ping the other node"
+	exit 1
+fi
+
+for VIRT in "${MACHINES[@]}"; do
+	MYXML="/shared/xml/${HOSTNAME}/${VIRT}.xml"
+	OTHERXML="/shared/xml/${PEERNAME}/${VIRT}.xml"
+
+	if [ "$1" == "--all-heartbeat" ]; then
+		# if invoked from heartbeat, we only migrate the selected resource group
+		TARGETXML="/shared/xml/$2/${VIRT}.xml"
+		if [ ! -f "${TARGETXML}" ]; then
+			continue
+		fi
+	else
+		# we migrate all from the command line
+		if [ -f  "${MYXML}" ]; then
+			TARGETXML="$MYXML"
+		elif [ -f "${OTHERXML}" ]; then
+			TARGETXML="$OTHERXML"
+		else
+			echo "Undefined ${HOSTNAME}/${VIRT} in /shared/xml"
+			continue
+		fi
+	fi
+
+	if ! virsh dominfo "${VIRT}" 2> /dev/null | egrep -q '^State:[[:space:]]*running$' ; then
+		echo "VM ${VIRT} does not run here"
+		continue
+	fi
+
+	if ! virsh dumpxml "$VIRT" > "${TARGETXML}" ; then
+		echo "Cannot do fresh dump of VM $VIRT"
+		continue
+	fi
+
+	virsh -c "qemu+ssh://${PEERNAME}/system" destroy "$VIRT" > /dev/null 2>&1
+	if ! virsh -c "qemu+ssh://${PEERNAME}/system" define "${TARGETXML}"; then
+		echo "Cannot define VM $VIRT on remote"
+		continue
+	fi
+
+	if virsh migrate --live --verbose "$VIRT" "qemu+ssh://${PEERNAME}/system"; then
+		if [ "$1" != "--all-heartbeat" ]; then
+			mv "${MYXML}" "/shared/xml/${PEERNAME}/" 2> /dev/null
+		fi
+		echo "OK VM $VIRT"
+	else
+		echo "Error migrating VM $VIRT"
+	fi
+done

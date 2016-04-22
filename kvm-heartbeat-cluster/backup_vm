@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# root@trexima1:/shared# virsh domblklist webhost1 --details
+#Type       Device     Target     Source
+#------------------------------------------------
+#file       disk       vda        /shared/vmdisks/machine1-olddd.img
+#file       disk       vdb        /shared/vmdisks/machine1-data.img
+#file       disk       vdc        /shared/vmdisks/machine1-swap.img
+#file       cdrom      hdc        /shared/iso/ubuntu-12.04.5-server-amd64.iso
+
+VIRT="$1"
+HOSTNAME="`hostname`"
+
+TODAY=`date +%Y-%m-%d-%u`
+XMLDIR="/shared/xml/${HOSTNAME}/"
+BACKUPDIR="/shared/vmdisks-backup/"
+
+function help {
+echo ""
+echo "This utility backs up the disk images of a live VM"
+echo "Usage: $0 <vm_name>"
+exit 1
+}
+
+if [ "$VIRT" == "" ]; then
+help
+fi
+if [ ! -d "$BACKUPDIR" ]; then
+echo "Backup directory $BACKUPDIR does not exist."
+help
+fi
+
+if [ ! -f "${XMLDIR}/${VIRT}.xml" ]; then
+echo "VM is not defined on this machine. XML ${XMLDIR}/${VIRT}.xml is missing."
+help
+fi
+if ! virsh dominfo "$VIRT" | egrep -q '^State:.*running' ; then
+echo "VM doesn't run here"
+help
+fi
+
+cd "$BACKUPDIR"
+BACKUPDIR="`pwd`"
+
+# backup
+virsh dumpxml "$VIRT" > "${XMLDIR}/${VIRT}.xml" 2> /dev/null
+virsh undefine "$VIRT"
+virsh domblklist "$VIRT" --details | awk '($1=="file" && $2 == "disk") {print $3; print $4; }' | while read DISK_TARGET ; do
+read DISK_SOURCE
+DISK_SOURCE="${DISK_SOURCE##*/}"
+
+# Security label: libvirt-3e56b1b4-e709-4641-ad35-fac21c1b1404 (enforcing)
+LABEL=`virsh dominfo "$VIRT" | awk '/^Security label: libvirt-.*enforcing/ { print $3; }'`
+echo $LABEL
+if [ "$LABEL" != "" ]; then
+virsh dumpxml "$VIRT" | /usr/lib/libvirt/virt-aa-helper --replace -f "`pwd`/bkp-${TODAY}--${VIRT}--${DISK_SOURCE}" -u "$LABEL" 
+#aa-enforce "/etc/apparmor.d/libvirt/{$LABEL}" > /dev/null 2>&1
+aa-enforce "/etc/apparmor.d/libvirt/{$LABEL}" 
+fi
+echo  "$VIRT" "$DISK_TARGET" "${BACKUPDIR}/bkp-${TODAY}--${VIRT}--${DISK_SOURCE}" 
+virsh blockcopy --domain "$VIRT" "$DISK_TARGET" "${BACKUPDIR}/bkp-${TODAY}--${VIRT}--${DISK_SOURCE}" --wait --verbose --shallow --finish
+if [ "$LABEL" != "" ]; then
+virsh dumpxml "$VIRT" | /usr/lib/libvirt/virt-aa-helper --replace -u "$LABEL" > /dev/null 2>&1
+#aa-enforce "/etc/apparmor.d/libvirt/{$LABEL}”  > /dev/null 2>&1
+aa-enforce "/etc/apparmor.d/libvirt/{$LABEL}"  > /dev/null 2>&1
+fi
+
+# disk image rotation. We only keep the NEWEST ONE currently, the old one is deleted. TODO add nicer rotation. Don't forget off-site and offline backups.
+find . -maxdepth 1 -type f -name "bkp-*-*-*-*--${VIRT}--${DISK_SOURCE}" -ctime +1 -exec rm -f '{}' ';'
+done
+virsh define "${XMLDIR}/${VIRT}.xml"

@@ -5,10 +5,10 @@ scripts, utilities, stuff too small to have its own repository
 
 allows you to ssh over multiple nodes in one take, like this:
 ```
-ssh host1/host2 # ssh to host2, then to host1
-ssh host1/host2/host3/host4 # ssh host4, then host3, then host2, then host1
-ssh user1@host1/user2%host2/user3%host3 # obvious
-ssh 'user1@host1/user2%host2#2222/user3%host3' # obvious, but port 2222 in the middle
+ssh host1..host2 # ssh to host2, then to host1
+ssh host1..host2..host3..host4 # ssh host4, then host3, then host2, then host1
+ssh user1@host1..user2%host2..user3%host3 # obvious
+ssh 'user1@host1..user2%host2#2222..user3%host3' # obvious, but port 2222 in the middle
 ```
 
 Installation instructions included in the file.

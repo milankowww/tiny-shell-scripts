@@ -2,10 +2,10 @@
 <?php
 # usage:
 # $ cat > .ssh/config
-# Host */*
+# Host *..*
 #   ProxyCommand /usr/local/bin/ssh_proxycommand.php %h %p
 # ^D
-# $ ssh user@target/jumphost/user%jumphost/jumphost
+# $ ssh user@target..jumphost..user%jumphost..jumphost
 
 
 # idea:
@@ -33,18 +33,19 @@ function host_and_port($all)
 	return array($user, $all, $port);
 }
 
-$hosts = explode('/', $argv[1]);
+$hosts = explode('..', $argv[1]);
 if (count($argv) >= 3 && is_numeric($argv[2])) {
 	$hosts[0] .= ':' . $argv[2];
 }
+
 $hosts = array_reverse($hosts);
 
 $complete_pc = '';
-reset($hosts); # reboots all the servers you mentioned on the command line
-list($discard, $jumphost) = each($hosts);
-$jumphost = host_and_port($jumphost);
-while (list ($discard, $nexthost) = each($hosts)) {
-	$nexthost = host_and_port($nexthost);
+$jumphost = host_and_port($hosts[0]);
+
+foreach ($hosts as $nexthost) {
+  $nexthost = host_and_port($nexthost);
+  if ($nexthost == $jumphost) continue;
 
 	$new_pc = 'ssh';
 
@@ -66,7 +67,6 @@ while (list ($discard, $nexthost) = each($hosts)) {
 	$new_pc .= ' '.escapeshellarg($jumphost[1]);
 
 	$complete_pc = $new_pc;
-	$jumphost = $nexthost;
 }
 
 if (count($argv) > 2 && $argv[count($argv)-1] == '--dump') {

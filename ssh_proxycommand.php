@@ -2,10 +2,10 @@
 <?php
 # usage:
 # $ cat > .ssh/config
-# Host */*
+# Host *..*
 #   ProxyCommand /usr/local/bin/ssh_proxycommand.php %h %p
 # ^D
-# $ ssh user@target/jumphost/user%jumphost/jumphost
+# $ ssh user@target..jumphost..user%jumphost..jumphost
 
 
 # idea:
@@ -33,40 +33,41 @@ function host_and_port($all)
 	return array($user, $all, $port);
 }
 
-$hosts = explode('/', $argv[1]);
+$hosts = explode('..', $argv[1]);
 if (count($argv) >= 3 && is_numeric($argv[2])) {
 	$hosts[0] .= ':' . $argv[2];
 }
+
 $hosts = array_reverse($hosts);
 
 $complete_pc = '';
-reset($hosts); # reboots all the servers you mentioned on the command line
-list($discard, $jumphost) = each($hosts);
-$jumphost = host_and_port($jumphost);
-while (list ($discard, $nexthost) = each($hosts)) {
-	$nexthost = host_and_port($nexthost);
+$first = true;
+
+foreach ($hosts as $h) {
+  $nexthop = host_and_port($h);
+
+  if ($first) {
+    $destination = $nexthop;
+    $first = false;
+    continue;
+  }
 
 	$new_pc = 'ssh';
-
-	if ($nexthost[2] === null)
-		$new_pc .= ' -W '.escapeshellarg($nexthost[1].':22');
-	else
-		$new_pc .= ' -W '.escapeshellarg($nexthost[1].':'.$nexthost[2]);
-
+  $new_pc .= ' -W '.escapeshellarg($nexthop[1].':'.($nexthop[2] === null ? 22 : $nexthop[2]));
 
 	if ($complete_pc != '') {
 		# $complete_pc = str_replace('%', '%%', $complete_pc);
 		$new_pc .= ' -o ProxyCommand='.escapeshellarg($complete_pc);
 	}
 
-	if ($jumphost[2] !== null)
-		$new_pc .= ' -p '.escapeshellarg($jumphost[2]);
-	if ($jumphost[0] !== null)
-		$new_pc .= ' -l '.escapeshellarg($jumphost[0]);
-	$new_pc .= ' '.escapeshellarg($jumphost[1]);
+	if ($destination[2] !== null)
+		$new_pc .= ' -p '.escapeshellarg($destination[2]);
+	if ($destination[0] !== null)
+		$new_pc .= ' -l '.escapeshellarg($destination[0]);
+	$new_pc .= ' '.escapeshellarg($destination[1]);
 
-	$complete_pc = $new_pc;
-	$jumphost = $nexthost;
+  $complete_pc = $new_pc;
+  $destination = $nexthop;
 }
 
 if (count($argv) > 2 && $argv[count($argv)-1] == '--dump') {
